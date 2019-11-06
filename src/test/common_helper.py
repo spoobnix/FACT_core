@@ -69,7 +69,7 @@ class MockFileObject:
         self.processed_analysis = {'file_type': {'mime': 'application/x-executable'}}
 
 
-class DatabaseMock:
+class DatabaseMock:  # pylint: disable=too-many-public-methods
     fw_uid = TEST_FW.get_uid()
     fo_uid = TEST_TEXT_FILE.get_uid()
     fw2_uid = TEST_FW_2.get_uid()
@@ -141,7 +141,8 @@ class DatabaseMock:
         if compare_id == normalize_compare_id(';'.join([TEST_FW.uid, TEST_FW_2.uid])):
             return {
                 'this_is': 'a_compare_result',
-                'general': {'hid': {TEST_FW.uid: 'foo', TEST_TEXT_FILE.uid: 'bar'}}
+                'general': {'hid': {TEST_FW.uid: 'foo', TEST_TEXT_FILE.uid: 'bar'}},
+                'plugins': {'File_Coverage': {'some_feature': {TEST_FW.uid: [TEST_TEXT_FILE.uid]}}}
             }
         if compare_id == normalize_compare_id(';'.join([TEST_FW.uid, TEST_TEXT_FILE.uid])):
             return {'this_is': 'a_compare_result'}
@@ -190,7 +191,7 @@ class DatabaseMock:
             return {}
 
     def get_data_for_nice_list(self, input_data, root_uid):
-        return []
+        return [input_data, root_uid]
 
     @staticmethod
     def create_analysis_structure():
@@ -325,6 +326,11 @@ class DatabaseMock:
 
     def get_specific_fields_of_db_entry(self, uid, field_dict):
         return None  # TODO
+
+    def get_summary(self, fo, selected_analysis):
+        if fo.uid == TEST_FW.get_uid() and selected_analysis == 'foobar':
+            return {'foobar': ['some_uid']}
+        return None
 
 
 def fake_exit(self, *args):
