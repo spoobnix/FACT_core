@@ -37,7 +37,7 @@ def _create_variety_data(config):
     full_variety_path = os.path.join(get_src_dir(), config['data_storage']['variety_path'])
     output, return_code = execute_shell_command_get_return_code(
         'mongo --port {mongo_port} {main_database} -u "{username}" -p "{password}" --authenticationDatabase "admin" '
-        '--eval "var collection = \'file_objects\', persistResults=true" {script_path}'.format(
+        '--eval "var collection = \'file_objects\', persistResults=true, excludeSubkeys = [ \'processed_analysis.tlsh\' ]" {script_path}'.format(
             mongo_port=config['data_storage']['mongo_port'],
             username=config['data_storage']['db_admin_user'],
             password=config['data_storage']['db_admin_pw'],
