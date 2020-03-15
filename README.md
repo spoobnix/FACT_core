@@ -112,3 +112,54 @@ We've been happy to show FACT in a number of BlackHat Arsenal sessions.
     Some plug-ins may have different licenses. If so, a license file is provided in the plug-in's folder.
 ```
 
+              Any other keyword arguments specified override any
+              same-named existing construction variables.
+
+              An action can be an external command,
+              specified as a string,
+              or a callable Python object;
+              see the manpage section "Action Objects"
+              for more complete information.
+              Also note that a string specifying an external command
+              may be preceded by an
+              @
+              (at-sign)
+              to suppress printing the command in question,
+              or by a
+              -
+              (hyphen)
+              to ignore the exit status of the external command.
+
+              Examples:
+
+              env.Command('foo.out', 'foo.in',
+                          " <  > ")
+
+              env.Command('bar.out', 'bar.in',
+                          ["rm -f ",
+                           " <  > "],
+                          ENV={'PATH': '/usr/local/bin/'})
+
+              def rename(env, target, source):
+                  import os
+                  os.rename('.tmp', str(target[0]))
+
+              env.Command('baz.out', 'baz.in',
+                          [" <  > .tmp",
+                        rename])
+              .fi
+
+              Note that the
+              Command
+              function will usually assume, by default,
+              that the specified targets and/or sources are Files,
+              if no other part of the configuration
+              identifies what type of entries they are.
+              If necessary, you can explicitly specify
+              that targets or source nodes should
+              be treated as directories
+              by using the
+              Dir [scons(1)]
+              or
+              env.Dir
+              functions.
