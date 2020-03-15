@@ -1,0 +1,23 @@
+# PLATFORMS
+* Ubuntu latest stable and stable currently the *only* supported host platform *
+
+### Linux
+  _dpkg_ : 
+	.- *apt* `build-essential`
+  _rpm_ :
+	.- *yum* `groupinstall "Development Tools"`
+  _arch_ :
+	.- *pacman* `base-devel scons python-mongo`
+
+## General prerequisites
+  _MongoDB 3.x built in python venv_
+	.- *default* `python 3.8+ w/ pipenv --python=3.6`
+  _WSGI middleware_
+	.- *default* `uwsgi`
+  _HTTP/1 middleware_
+	.- *default* `nginx # reverse proxy`
+  _CFG w/ ffi_
+	.- *default* `r2pipe`
+  _Container runtime_
+	.- *default* `containerd # docker`
+# End of PLATFORMS.md
