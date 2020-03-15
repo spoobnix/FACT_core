@@ -1,0 +1,9 @@
+[submodule "contrib/mongo"]
+	path = contrib/mongo
+	url = git://github.com/mongodb/mongo.git
+[submodule "contrib/nginx"]
+	path = contrib/nginx
+	url = git://github.com/nginx/nginx.git
+[submodule "contrib/radare"]
+	path = contrib/radare
+	url = git://github.com/radareorg/radare2.git
