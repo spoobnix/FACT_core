@@ -45,3 +45,4 @@ start_faf_frontend
 update_statistic.cron
 wget-lo*
 .gitignore
+RATIONALE.tmp
