@@ -1,0 +1,313 @@
+import configparser
+import os
+from configparser import ConfigParser, NoOptionError, NoSectionError
+
+from helperFunctions.fileSystem import get_src_dir
+from helperFunctions.process import complete_shutdown
+
+
+def load_config(config_file_name):
+    '''
+    loads config of CONFIG_DIR/config_file_name
+    Returns config object
+    '''
+    config = configparser.ConfigParser()
+    config_path = '{}/{}'.format(get_config_dir(), config_file_name)
+    if os.path.exists(config_path):
+        config.read(config_path)
+        return config
+    complete_shutdown('config file not found: {}'.format(config_path))
+
+
+def get_config_dir():
+    '''
+    Returns the absolute path of the config directory
+    '''
+    return '{}/config'.format(get_src_dir())
+
+
+def read_list_from_config(config_file: ConfigParser, section: str, key: str, default=None):
+    if default is None:
+        default = []
+
+    if not config_file:
+        return default
+
+    try:
+        config_entry = config_file.get(section, key)
+    except (NoOptionError, NoSectionError):
+        return default
+
+    if not config_entry:
+        return default
+    return [item.strip() for item in config_entry.split(',') if item]
+def get_unmatched_dependencies(fo_list, dependency_list):
+    missing_dependencies = []
+    for dependency in dependency_list:
+        for fo in fo_list:
+            if dependency not in fo.processed_analysis:
+                missing_dependencies.append(dependency)
+    return missing_dependencies
+import yaml
+
+
+def parse_yaml(file_path):
+    with open(file_path, 'r') as fd:
+        data = yaml.safe_load(fd)
+
+    return data
+
+
+def get_mongo_path(file_path):
+    data = parse_yaml(file_path)
+    return data['storage']['dbPath']
+import logging
+import os
+from contextlib import suppress
+from pathlib import Path
+
+from common_helper_process import execute_shell_command_get_return_code
+
+from helperFunctions.install import InstallationError, OperateInDirectory, apt_install_packages, apt_update_sources
+
+MONGO_MIRROR_COMMANDS = {
+    'debian': {
+        'key': 'wget -qO - https://www.mongodb.org/static/pgp/server-3.6.asc | sudo apt-key add -',
+        'sources': 'echo "deb http://repo.mongodb.org/apt/debian stretch/mongodb-org/3.6 main" | sudo tee /etc/apt/sources.list.d/mongo.list'
+    },
+    'xenial': {
+        'key': 'sudo -E apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 2930ADAE8CAF5059EE73BB4B58712A2291FA4AD5',
+        'sources': 'echo "deb https://repo.mongodb.org/apt/ubuntu xenial/mongodb-org/3.6 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-3.6.list'
+    }
+}
+
+
+def _get_db_directory():
+    output, return_code = execute_shell_command_get_return_code(r'grep -oP "dbPath:[\s]*\K[^\s]+" ../config/mongod.conf')
+    if return_code != 0:
+        raise InstallationError('Unable to locate target for database directory')
+    return output.strip()
+
+
+def _add_mongo_mirror(distribution):
+    apt_key_output, apt_key_code = execute_shell_command_get_return_code(
+        MONGO_MIRROR_COMMANDS[distribution]['key']
+    )
+    tee_output, tee_code = execute_shell_command_get_return_code(
+        MONGO_MIRROR_COMMANDS[distribution]['sources']
+    )
+    if any(code != 0 for code in (apt_key_code, tee_code)):
+        raise InstallationError('Unable to set up mongodb installation\n{}'.format('\n'.join((apt_key_output, tee_output))))
+
+
+def main(distribution):
+    logging.info('Setting up mongo database')
+
+    if distribution in ['xenial', 'debian']:
+        _add_mongo_mirror(distribution)
+        apt_update_sources()
+        apt_install_packages('mongodb-org')
+    else:
+        apt_install_packages('mongodb')
+
+    # creating DB directory
+    fact_db_directory = _get_db_directory()
+    mkdir_output, _ = execute_shell_command_get_return_code('sudo mkdir -p --mode=0744 {}'.format(fact_db_directory))
+    chown_output, chown_code = execute_shell_command_get_return_code('sudo chown {}:{} {}'.format(os.getuid(), os.getgid(), fact_db_directory))
+    if chown_code != 0:
+        raise InstallationError('Failed to set up database directory. Check if parent folder exists\n{}'.format('\n'.join((mkdir_output, chown_output))))
+
+    # initializing DB authentication
+    logging.info('Initialize database')
+    with OperateInDirectory('..'):
+        init_output, init_code = execute_shell_command_get_return_code('python3 init_database.py')
+    if init_code != 0:
+        raise InstallationError('Unable to initialize database\n{}'.format(init_output))
+
+    with OperateInDirectory('../../'):
+        with suppress(FileNotFoundError):
+            Path('start_fact_db').unlink()
+        Path('start_fact_db').symlink_to('src/start_fact_db.py')
+
+    return 0
+'''
+    Firmware Analysis and Comparison Tool (FACT)
+    Copyright (C) 2015-2019  Fraunhofer FKIE
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+'''
+
+import argparse
+import configparser
+import logging
+import os
+import sys
+
+import psutil
+from common_helper_files import create_dir_for_file
+
+from helperFunctions.config import get_config_dir
+from version import __VERSION__
+
+
+def program_setup(name, description, version=__VERSION__, command_line_options=None):
+    command_line_options = sys.argv if not command_line_options else command_line_options
+    args = _setup_argparser(name, description, command_line_options=command_line_options, version=version)
+    config = _load_config(args)
+    _setup_logging(config, args)
+    return args, config
+
+
+def _setup_argparser(name, description, command_line_options, version=__VERSION__):
+    parser = argparse.ArgumentParser(description='{} - {}'.format(name, description))
+    parser.add_argument('-V', '--version', action='version', version='{} {}'.format(name, version))
+    parser.add_argument('-l', '--log_file', help='path to log file', default=None)
+    parser.add_argument('-L', '--log_level', help='define the log level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default=None)
+    parser.add_argument('-d', '--debug', action='store_true', default=False, help='print debug messages')
+    parser.add_argument('-s', '--silent', action='store_true', default=False, help='don\'t log to command line')
+    parser.add_argument('-C', '--config_file', help='set path to config File', default='{}/main.cfg'.format(get_config_dir()))
+    parser.add_argument('-t', '--testing', default=False, action='store_true', help='shutdown system after one iteration')
+    return parser.parse_args(command_line_options[1:])
+
+
+def _get_console_output_level(debug_flag):
+    if debug_flag:
+        return logging.DEBUG
+    return logging.INFO
+
+
+def _setup_logging(config, args):
+    log_level = getattr(logging, config['Logging']['logLevel'], None)
+    log_format = logging.Formatter(fmt='[%(asctime)s][%(module)s][%(levelname)s]: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    logger = logging.getLogger('')
+    logger.setLevel(logging.DEBUG)
+
+    create_dir_for_file(config['Logging']['logFile'])
+    file_log = logging.FileHandler(config['Logging']['logFile'])
+    file_log.setLevel(log_level)
+    file_log.setFormatter(log_format)
+    logger.addHandler(file_log)
+
+    if not args.silent:
+        console_log = logging.StreamHandler()
+        console_log.setLevel(_get_console_output_level(args.debug))
+        console_log.setFormatter(log_format)
+        logger.addHandler(console_log)
+
+
+def _load_config(args):
+    config = configparser.ConfigParser()
+    config.read(args.config_file)
+    if args.log_file is not None:
+        config['Logging']['logFile'] = args.log_file
+    if args.log_level is not None:
+        config['Logging']['logLevel'] = args.log_level
+    return config
+
+
+def was_started_by_start_fact():
+    parent = ' '.join(psutil.Process(os.getppid()).cmdline())
+    return 'start_fact.py' in parent or 'start_all_installed_fact_components' in parent
+import logging
+import os
+from contextlib import suppress
+from pathlib import Path
+
+from common_helper_process import execute_shell_command_get_return_code
+
+from helperFunctions.install import (
+    InstallationError, OperateInDirectory, apt_install_packages, apt_remove_packages, apt_update_sources,
+    install_github_project, pip3_install_packages
+)
+
+
+def install_pip(python_command):
+    logging.info('Installing {} pip'.format(python_command))
+    for command in ['wget https://bootstrap.pypa.io/get-pip.py', 'sudo -EH {} get-pip.py'.format(python_command), 'rm get-pip.py']:
+        output, return_code = execute_shell_command_get_return_code(command)
+        if return_code != 0:
+            raise InstallationError('Error in pip installation for {}:\n{}'.format(python_command, output))
+
+
+def main(distribution):  # pylint: disable=too-many-statements
+    apt_install_packages('apt-transport-https')
+
+    logging.info('Updating system')
+    apt_update_sources()
+
+    _, is_repository = execute_shell_command_get_return_code('git status')
+    if is_repository == 0:
+        # update submodules
+        git_output, git_code = execute_shell_command_get_return_code('(cd ../../ && git submodule foreach "git pull")')
+        if git_code != 0:
+            raise InstallationError('Failed to update submodules\n{}'.format(git_output))
+    else:
+        logging.warning('FACT is not set up using git. Note that *adding submodules* won\'t work!!')
+
+    # make bin dir
+    with suppress(FileExistsError):
+        os.mkdir('../bin')
+
+    # install python3 and general build stuff
+    apt_install_packages('python3', 'python3-dev', 'build-essential', 'automake', 'autoconf', 'libtool', 'git', 'unzip')
+    if not distribution == 'xenial':
+        pip3_install_packages('testresources')
+
+    # get a bugfree recent pip version
+    apt_remove_packages('python3-pip', 'python3-setuptools', 'python3-wheel')
+    install_pip('python3')
+
+    # install python2
+    apt_install_packages('python', 'python-dev')
+    apt_remove_packages('python-pip')
+    install_pip('python2')
+
+    # install general python dependencys
+    apt_install_packages('libmagic-dev')
+    apt_install_packages('libfuzzy-dev')
+    apt_install_packages('python3-tlsh')
+    pip3_install_packages('git+https://github.com/fkie-cad/fact_helper_file.git')
+    pip3_install_packages('psutil')
+    pip3_install_packages('pytest==3.5.1', 'pytest-cov', 'pytest-flake8', 'pylint', 'python-magic', 'xmltodict', 'yara-python==3.7.0', 'appdirs')
+    pip3_install_packages('ssdeep')
+
+    pip3_install_packages('lief')
+
+    pip3_install_packages('requests')
+
+    # install python mongo bindings
+    pip3_install_packages('pymongo', 'pyyaml')
+
+    # VarietyJS (is executed by update_statistic.py)
+    try:
+        install_github_project('variety/variety', ['git checkout 2f4d815', 'mv -f variety.js ../../bin', 'mv -f spec ../../bin'])
+    except InstallationError as installation_error:
+        if 'Directory not empty' not in str(installation_error):
+            raise installation_error
+        logging.warning('variety spec not overwritten')
+
+    #  installing common code modules
+    pip3_install_packages('hurry.filesize')
+    pip3_install_packages('git+https://github.com/fkie-cad/common_helper_files.git')
+    pip3_install_packages('git+https://github.com/fkie-cad/common_helper_mongo.git')
+    pip3_install_packages('git+https://github.com/mass-project/common_helper_encoder.git')
+    pip3_install_packages('git+https://github.com/fkie-cad/common_helper_filter.git')
+    pip3_install_packages('git+https://github.com/fkie-cad/common_helper_process.git')
+
+    with OperateInDirectory('../../'):
+        with suppress(FileNotFoundError):
+            Path('start_all_installed_fact_components').unlink()
+        Path('start_all_installed_fact_components').symlink_to('src/start_fact.py')
+
+    return 0

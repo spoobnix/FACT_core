@@ -1,3 +1,12 @@
+storage:
+  dbPath: /media/data/fact_wt_mongodb
+  journal:
+    enabled: true
+  engine: wiredTiger
+
+net:
+  port: 27018
+  bindIp: 127.0.0.1
 http {
     log_format compression '$remote_addr - $remote_user [$time_local] '
                            '"$request" $status $body_bytes_sent '
