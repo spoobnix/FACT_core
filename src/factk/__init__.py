@@ -1,20 +1,3 @@
-"""
-    Firmware Analysis and Comparison Tool (FACT)
-    Copyright (C) 2015-2019  Fraunhofer FKIE
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-"""
 
 FACT_ASCII_ART = '''
                                                       ***********.
@@ -37,89 +20,96 @@ FACT_ASCII_ART = '''
                                                       ***********'
 '''
 
-#import logging
-#import os
-#import signal
-#import sys
-#from shlex import split
-#from subprocess import Popen, TimeoutExpired
-#from time import sleep
-
-#from helperFunctions.program_setup import program_setup
-#from helperFunctions.config import get_src_dir
-
 __VERSION__ = '0.1.0'
+__LICENSE__ = '''
+Firmware Analysis and Comparison Tool (FACT)
+Copyright (C) 2015-2019  Fraunhofer FKIE
+Copyright (C) 2020 SpoobSec
 
-#PROGRAM_NAME = 'FACT Starter'
-#PROGRAM_DESCRIPTION = 'This script starts all installed FACT components'
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-#  def _evaluate_optional_args(args):
-#       optional_args = ''
-#       if args.debug:
-#           optional_args += ' -d'
-#       if args.silent:
-#           optional_args += ' -s'
-#       if args.testing:
-#           optional_args += ' -t'
-#       return optional_args
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
 
-
-#   def _start_component(component, args):
-#       script_path = os.path.join(get_src_dir(), '../start_fact_{}'.format(component))
-#       if os.path.exists(script_path):
-#           logging.info('starting {}'.format(component))
-#           optional_args = _evaluate_optional_args(args)
-#           command = '{} -l {} -L {} -C {} {}'.format(
-#               script_path, config['Logging']['logFile'], config['Logging']['logLevel'], args.config_file, optional_args
-#           )
-#           p = Popen(split(command))
-#           return p
-#       else:
-#           logging.debug('{} not installed'.format(component))
-#           return None
-
-
-#   def _terminate_process(process: Popen):
-#       if process is not None:
-#           os.kill(process.pid, signal.SIGUSR1)
-#           try:
-#               process.wait(timeout=60)
-#           except TimeoutExpired:
-#               logging.error('component did not stop in time -> kill')
-#               process.kill()
-
-
-#   def shutdown(*_):
-#       # global run
-#       logging.info('shutting down...')
-#       run = False
-
-
-# signal.signal(signal.SIGINT, shutdown)
-
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
-if __name__ == '__main__':
-    process_list = []
-    run = True
-    args, config = program_setup(PROGRAM_NAME, PROGRAM_DESCRIPTION)
 
-    db_process = _start_component('db', args)
-    sleep(2)
-    frontend_process = _start_component('frontend', args)
-    backend_process = _start_component('backend', args)
+def gen_urandom_i32(seed=None):
+    import random
+    """TODO: refactor to use secrets or hw encryption controller"""
+    random.seed(seed)
+    return random.getrandbits(255).to_bytes(32, 'little')
 
-    while run:
-        sleep(1)
-        if args.testing:
-            break
+# TODO: handle PKCS#8/ASN1
+# TODO: handle PKCS#12/x509
+# TODO: handle CA Root SSL/PEM
 
-    logging.debug('shutdown backend')
-    _terminate_process(backend_process)
-    logging.debug('shutdown frontend')
-    _terminate_process(frontend_process)
-    logging.debug('shutdown db')
-    _terminate_process(db_process)
+lambda x, s: return f'x-{s}' 
+__T = ('gzip', 'java-archive', 'rar', 'vnd.ms-cab-compressed', 
+        map(x, ('7z-compressed', 'ace', 'adf', 'alzip', 'arc', 
+            'archive', 'arj', 'bzip2', 'cab', 'chm', 'compress', 
+            'cpio', 'debian-package', 'dms', 'gzip', 'iso9660-image', 
+            'lha', 'lrzip', 'lzh', 'lzip', 'lzma', 'lzop', 'rar',
+            'redhat-packager-manager', 'rpm', 'rzip', 'shar', 
+            'sit', 'sitx', 'stuffit', 'stuffitx', 'tar', 'xz', 
+            'zip-compressed', 'zoo', 'zip', 'zpaq')))
+       
+ARCHIVE_T = enumerate(__T))
 
-    sys.exit()
-'''
+ICON_T = {
+    'application/x-executable': '/static/file_icons/binary.png',
+    'inode/symlink': '/static/file_icons/link.png',
+    'text/html': '/static/file_icons/html.png',
+}
+
+CATEGORY_T = {
+    'audio/': '/static/file_icons/multimedia.png',
+    'filesystem/': '/static/file_icons/filesystem.png',
+    'firmware/': '/static/file_icons/firmware.png',
+    'image/': '/static/file_icons/image.png',
+    'text/': '/static/file_icons/text.png',
+}
+
+# TODO: get ico for MIME
+# TODO: get relative paths
+
+import os
+from selectors import epoll, EPOLLEXCLUSIVE, EPOLLRDBAND
+from dataclasses import dataclass
+
+@dataclass(init=False, repr=True)
+class FirmwareSchema:
+    oid: id # primary key
+    device_name: str = ''
+    version: str = ''
+    device_class: str = ''
+    vendor: str = ''
+    part: str = ''
+    release_date: str = ''
+    tags: dict = ''
+
+def register_firmware_entry(path):
+    try:
+        with os.open(path, 'r+b') as fw:
+            epoll.register(fw[EPOLLEXCLUSIVE])
+    except Exception as err:
+        print(f'something wrong with {path} or platform')
+        raise err
+
+def compare_firmware(fd):
+    # db_interface.get_complete_object_including_all_summaries(uid)
+    # bs.get_binary_and_file_name(fo.uid)[0]
+    # _create_general_section_dict
+    # _execute_compare_plugins
+    # TODO: for oid in db: shelve.register(oid) 
+    # TODO: epoll.fromfd(fd[EPOLLRDBAND])
+    # TODO: sched foreground task to instantiate FirmwareSchema(*oid) near the end of activity.
+
+#TODO: fields for document store: pk, fk: mutliple_keys = True, notes=tuple, *tags
 

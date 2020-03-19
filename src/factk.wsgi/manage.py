@@ -1,181 +1,128 @@
-#! /usr/bin/env python3
-'''
-    Firmware Analysis and Comparison Tool (FACT)
-    Copyright (C) 2015-2019  Fraunhofer FKIE
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-'''
-
 import logging
-import pickle
-import signal
-import sys
-import tempfile
-from shlex import split
-from subprocess import Popen, TimeoutExpired
+from flask import render_template, request
+import importlib
+import inspect
+import pkgutil
+from time import time
+import json
+import random
+from typing import List
+import json
+from tempfile import TemporaryDirectory
 from time import sleep
+import json
+import logging
+from datetime import datetime
 
-from common_helper_process import execute_shell_command
+from dateutil.relativedelta import relativedelta
+from flask import redirect, render_template, request, url_for
+from flask_paginate import Pagination
 
-from helperFunctions.config import get_config_dir
+from helperFunctions.config import read_list_from_config
+from helperFunctions.database import ConnectTo
+from helperFunctions.dataConversion import make_unicode_string
+from helperFunctions.mongo_task_conversion import get_file_name_and_binary_from_request
+from helperFunctions.web_interface import apply_filters_to_query, filter_out_illegal_characters
+from helperFunctions.yara_binary_search import get_yara_error, is_valid_yara_rule_file
+from intercom.front_end_binding import InterComFrontEndBinding
+from storage.db_interface_frontend import FrontEndDbInterface
+from web_interface.components.component_base import ComponentBase
+from web_interface.security.decorator import roles_accepted
+from web_interface.security.privileges import PRIVILEGES
+
+
+import requests
+from flask import make_response, redirect, render_template, request
+
+from helperFunctions.database import ConnectTo
+from helperFunctions.mongo_task_conversion import (
+    check_for_errors, convert_analysis_task_to_fw_obj, create_analysis_task
+)
+from helperFunctions.pdf import build_pdf_report
+from helperFunctions.web_interface import get_radare_endpoint
+from intercom.front_end_binding import InterComFrontEndBinding
+from storage.db_interface_compare import CompareDbInterface, FactCompareException
+from storage.db_interface_frontend import FrontEndDbInterface
+from web_interface.components.component_base import ComponentBase
+from web_interface.security.decorator import roles_accepted
+from web_interface.security.privileges import PRIVILEGES
+
+
+from common_helper_filter.time import time_format
+from flask import render_template
+
+from helperFunctions.database import ConnectTo
+from helperFunctions.dataConversion import none_to_none
+from helperFunctions.hash import get_md5
+from helperFunctions.uid import is_list_of_uids
+from helperFunctions.web_interface import split_virtual_path, virtual_path_element_to_span
+from storage.db_interface_frontend import FrontEndDbInterface
+from web_interface import filter as flt
+
+
+from flask import redirect, render_template, request, url_for
+from flask_security import login_required
+
+from helperFunctions.database import ConnectTo
+from statistic.update import StatisticUpdater
+from storage.db_interface_admin import AdminDbInterface
+from storage.db_interface_compare import CompareDbInterface
+from storage.db_interface_frontend import FrontEndDbInterface
+from storage.db_interface_frontend_editing import FrontendEditingDbInterface
+from web_interface.components.component_base import ComponentBase
+from web_interface.security.decorator import roles_accepted
+from web_interface.security.privileges import PRIVILEGES
+
+
+from flask_restful import Resource
 from helperFunctions.fileSystem import get_src_dir
-from helperFunctions.program_setup import program_setup, was_started_by_start_fact
-from install.frontend import COMPOSE_VENV
-from statistic.work_load import WorkLoadStatistic
+from web_interface.components.component_base import ComponentBase
 
-PROGRAM_NAME = 'FACT Frontend'
-PROGRAM_DESCRIPTION = 'Firmware Analysis and Compare Tool Frontend'
-
-
-def shutdown(*_):
-    global run
-    logging.debug('shutting down frontend')
-    run = False
+ROUTES_MODULE_NAME = 'routes'
+PLUGIN_CATEGORIES = ['analysis', 'compare']
+PLUGIN_DIR = '{}/plugins'.format(get_src_dir())
 
 
-def _shutdown_uwsgi_server(process):
-    try:
-        process.wait(timeout=30)
-    except TimeoutExpired:
-        logging.error('frontend did not stop in time -> kill')
-        process.kill()
+from helperFunctions.database import ConnectTo
+from helperFunctions.web_interface import apply_filters_to_query
+from intercom.front_end_binding import InterComFrontEndBinding
+from statistic.update import StatisticUpdater
+from storage.db_interface_frontend import FrontEndDbInterface
+from storage.db_interface_statistic import StatisticDbViewer
+from web_interface.components.component_base import ComponentBase
+from web_interface.security.decorator import roles_accepted
+from web_interface.security.privileges import PRIVILEGES
 
 
-def start_uwsgi_server(config_path=None):
-    config_parameter = ' --pyargv {}'.format(config_path) if config_path else ''
-    command = 'uwsgi --ini  {}/uwsgi_config.ini{}'.format(get_config_dir(), config_parameter)
-    process = Popen(split(command), cwd=get_src_dir())
-    return process
+from contextlib import contextmanager
+
+from flask import render_template, request, flash, redirect, url_for
+from flask_security import current_user
+from sqlalchemy.exc import SQLAlchemyError
+
+from helperFunctions.web_interface import password_is_legal
+from web_interface.components.component_base import ComponentBase
+from web_interface.security.decorator import roles_accepted
+from web_interface.security.privileges import PRIVILEGES, ROLES
 
 
-def start_docker():
-    execute_shell_command('{} -f {}/install/radare/docker-compose.yml up -d'.format(COMPOSE_VENV / 'bin' / 'docker-compose', get_src_dir()))
+from contextlib import suppress
 
+from flask import redirect, render_template, render_template_string, request, session, url_for
+from flask_paginate import Pagination
 
-def stop_docker():
-    execute_shell_command('{} -f {}/install/radare/docker-compose.yml down'.format(COMPOSE_VENV / 'bin' / 'docker-compose', get_src_dir()))
+from helperFunctions.database import ConnectTo
+from helperFunctions.dataConversion import (
+    convert_compare_id_to_list, convert_uid_list_to_compare_id, normalize_compare_id
+)
+from helperFunctions.web_interface import get_template_as_string
+from intercom.front_end_binding import InterComFrontEndBinding
+from storage.db_interface_compare import CompareDbInterface, FactCompareException
+from storage.db_interface_view_sync import ViewReader
+from web_interface.components.component_base import ComponentBase
+from web_interface.security.decorator import roles_accepted
+from web_interface.security.privileges import PRIVILEGES
 
-
-if __name__ == '__main__':
-    if was_started_by_start_fact():
-        signal.signal(signal.SIGUSR1, shutdown)
-        signal.signal(signal.SIGINT, lambda *_: None)
-    else:
-        signal.signal(signal.SIGINT, shutdown)
-
-    run = True
-    args, config = program_setup(PROGRAM_NAME, PROGRAM_DESCRIPTION)
-
-    start_docker()
-
-    work_load_stat = WorkLoadStatistic(config=config, component='frontend')
-
-    with tempfile.NamedTemporaryFile() as fp:
-        fp.write(pickle.dumps(args))
-        fp.flush()
-        uwsgi_process = start_uwsgi_server(fp.name)
-
-        while run:
-            work_load_stat.update()
-            sleep(5)
-            if args.testing:
-                break
-
-        work_load_stat.shutdown()
-        _shutdown_uwsgi_server(uwsgi_process)
-
-    stop_docker()
-
-    sys.exit()
-#! /usr/bin/env python3
-'''
-    Firmware Analysis and Comparison Tool (FACT)
-    Copyright (C) 2015-2019  Fraunhofer FKIE
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-'''
-
-import logging
-import os
-import signal
-from time import sleep
-
-from helperFunctions.process import complete_shutdown
-from helperFunctions.program_setup import was_started_by_start_fact, program_setup
-from intercom.back_end_binding import InterComBackEndBinding
-from scheduler.Analysis import AnalysisScheduler
-from scheduler.analysis_tag import TaggingDaemon
-from scheduler.Compare import CompareScheduler
-from scheduler.Unpacking import UnpackingScheduler
-from statistic.work_load import WorkLoadStatistic
-
-PROGRAM_NAME = 'FACT Backend'
-PROGRAM_DESCRIPTION = 'Firmware Analysis and Compare Tool (FACT) Backend'
-
-
-def shutdown(signum, _):
-    global run
-    logging.info('received {signum}. shutting down {name}...'.format(signum=signum, name=PROGRAM_NAME))
-    run = False
-
-
-if __name__ == '__main__':
-    if was_started_by_start_fact():
-        signal.signal(signal.SIGUSR1, shutdown)
-        signal.signal(signal.SIGINT, lambda *_: None)
-        os.setpgid(os.getpid(), os.getpid())  # reset pgid to self so that "complete_shutdown" doesn't run amok
-    else:
-        signal.signal(signal.SIGINT, shutdown)
-    args, config = program_setup(PROGRAM_NAME, PROGRAM_DESCRIPTION)
-    analysis_service = AnalysisScheduler(config=config)
-    tagging_service = TaggingDaemon(analysis_scheduler=analysis_service)
-    unpacking_service = UnpackingScheduler(config=config, post_unpack=analysis_service.start_analysis_of_object, analysis_workload=analysis_service.get_scheduled_workload)
-    compare_service = CompareScheduler(config=config)
-    intercom = InterComBackEndBinding(config=config, analysis_service=analysis_service, compare_service=compare_service, unpacking_service=unpacking_service)
-    work_load_stat = WorkLoadStatistic(config=config)
-
-    run = True
-    while run:
-        work_load_stat.update(unpacking_workload=unpacking_service.get_scheduled_workload(), analysis_workload=analysis_service.get_scheduled_workload())
-        if any((unpacking_service.check_exceptions(), compare_service.check_exceptions(), analysis_service.check_exceptions())):
-            break
-        sleep(5)
-        if args.testing:
-            break
-
-    logging.info('shutdown components')
-    work_load_stat.shutdown()
-    intercom.shutdown()
-    compare_service.shutdown()
-    unpacking_service.shutdown()
-    tagging_service.shutdown()
-    analysis_service.shutdown()
-    if not args.testing:
-        complete_shutdown()
-# -*- coding: utf-8 -*-
-import html
 from typing import List
 
 from common_helper_files import human_readable_file_size
@@ -191,6 +138,32 @@ from web_interface.components.component_base import ComponentBase
 from web_interface.filter import bytes_to_str_filter, encode_base64_filter
 from web_interface.security.decorator import roles_accepted
 from web_interface.security.privileges import PRIVILEGES
+import json
+import os
+
+from common_helper_files import get_binary_from_file
+from flask import flash, render_template, render_template_string, request
+from flask_login.utils import current_user
+
+from helperFunctions.database import ConnectTo
+from helperFunctions.dataConversion import none_to_none
+from helperFunctions.fileSystem import get_src_dir
+from helperFunctions.mongo_task_conversion import (
+    check_for_errors, convert_analysis_task_to_fw_obj, create_re_analyze_task
+)
+from helperFunctions.web_interface import get_template_as_string, overwrite_default_plugins
+from intercom.front_end_binding import InterComFrontEndBinding
+from objects.firmware import Firmware
+from storage.db_interface_admin import AdminDbInterface
+from storage.db_interface_compare import CompareDbInterface
+from storage.db_interface_frontend import FrontEndDbInterface
+from storage.db_interface_view_sync import ViewReader
+from web_interface.components.compare_routes import get_comparison_uid_list_from_session
+from web_interface.components.component_base import ComponentBase
+from web_interface.security.authentication import user_has_privilege
+from web_interface.security.decorator import roles_accepted
+from web_interface.security.privileges import PRIVILEGES
+
 
 
 class AjaxRoutes(ComponentBase):
@@ -339,32 +312,6 @@ class AjaxRoutes(ComponentBase):
             firmware = sc.get_object(uid, analysis_filter=selected_analysis)
             summary_of_included_files = sc.get_summary(firmware, selected_analysis)
         return render_template('summary.html', summary_of_included_files=summary_of_included_files, root_uid=uid)
-import json
-import os
-
-from common_helper_files import get_binary_from_file
-from flask import flash, render_template, render_template_string, request
-from flask_login.utils import current_user
-
-from helperFunctions.database import ConnectTo
-from helperFunctions.dataConversion import none_to_none
-from helperFunctions.fileSystem import get_src_dir
-from helperFunctions.mongo_task_conversion import (
-    check_for_errors, convert_analysis_task_to_fw_obj, create_re_analyze_task
-)
-from helperFunctions.web_interface import get_template_as_string, overwrite_default_plugins
-from intercom.front_end_binding import InterComFrontEndBinding
-from objects.firmware import Firmware
-from storage.db_interface_admin import AdminDbInterface
-from storage.db_interface_compare import CompareDbInterface
-from storage.db_interface_frontend import FrontEndDbInterface
-from storage.db_interface_view_sync import ViewReader
-from web_interface.components.compare_routes import get_comparison_uid_list_from_session
-from web_interface.components.component_base import ComponentBase
-from web_interface.security.authentication import user_has_privilege
-from web_interface.security.decorator import roles_accepted
-from web_interface.security.privileges import PRIVILEGES
-
 
 def get_analysis_view(view_name):
     view_path = os.path.join(get_src_dir(), 'web_interface/templates/analysis_plugins/{}.html'.format(view_name))
@@ -506,24 +453,6 @@ class AnalysisRoutes(ComponentBase):
     @roles_accepted(*PRIVILEGES['delete'])
     def _re_do_analysis(self, uid):
         return self._update_analysis(uid, re_do=True)
-import logging
-from contextlib import suppress
-
-from flask import redirect, render_template, render_template_string, request, session, url_for
-from flask_paginate import Pagination
-
-from helperFunctions.database import ConnectTo
-from helperFunctions.dataConversion import (
-    convert_compare_id_to_list, convert_uid_list_to_compare_id, normalize_compare_id
-)
-from helperFunctions.web_interface import get_template_as_string
-from intercom.front_end_binding import InterComFrontEndBinding
-from storage.db_interface_compare import CompareDbInterface, FactCompareException
-from storage.db_interface_view_sync import ViewReader
-from web_interface.components.component_base import ComponentBase
-from web_interface.security.decorator import roles_accepted
-from web_interface.security.privileges import PRIVILEGES
-
 
 class CompareRoutes(ComponentBase):
     def _init_component(self):
@@ -706,26 +635,6 @@ class ComponentBase(metaclass=ABCMeta):
     @abstractmethod
     def _init_component(self):
         pass
-import json
-import logging
-from datetime import datetime
-
-from dateutil.relativedelta import relativedelta
-from flask import redirect, render_template, request, url_for
-from flask_paginate import Pagination
-
-from helperFunctions.config import read_list_from_config
-from helperFunctions.database import ConnectTo
-from helperFunctions.dataConversion import make_unicode_string
-from helperFunctions.mongo_task_conversion import get_file_name_and_binary_from_request
-from helperFunctions.web_interface import apply_filters_to_query, filter_out_illegal_characters
-from helperFunctions.yara_binary_search import get_yara_error, is_valid_yara_rule_file
-from intercom.front_end_binding import InterComFrontEndBinding
-from storage.db_interface_frontend import FrontEndDbInterface
-from web_interface.components.component_base import ComponentBase
-from web_interface.security.decorator import roles_accepted
-from web_interface.security.privileges import PRIVILEGES
-
 
 class DatabaseRoutes(ComponentBase):
 
@@ -929,26 +838,6 @@ class DatabaseRoutes(ComponentBase):
         ])
         query = json.dumps(query)
         return redirect(url_for('database/browse', query=query))
-import json
-from tempfile import TemporaryDirectory
-from time import sleep
-
-import requests
-from flask import make_response, redirect, render_template, request
-
-from helperFunctions.database import ConnectTo
-from helperFunctions.mongo_task_conversion import (
-    check_for_errors, convert_analysis_task_to_fw_obj, create_analysis_task
-)
-from helperFunctions.pdf import build_pdf_report
-from helperFunctions.web_interface import get_radare_endpoint
-from intercom.front_end_binding import InterComFrontEndBinding
-from storage.db_interface_compare import CompareDbInterface, FactCompareException
-from storage.db_interface_frontend import FrontEndDbInterface
-from web_interface.components.component_base import ComponentBase
-from web_interface.security.decorator import roles_accepted
-from web_interface.security.privileges import PRIVILEGES
-
 
 class IORoutes(ComponentBase):
     def _init_component(self):
@@ -1068,21 +957,6 @@ class IORoutes(ComponentBase):
         response.headers['Content-Disposition'] = 'attachment; filename={}'.format(pdf_path.name)
 
         return response
-import json
-import random
-from typing import List
-
-from common_helper_filter.time import time_format
-from flask import render_template
-
-from helperFunctions.database import ConnectTo
-from helperFunctions.dataConversion import none_to_none
-from helperFunctions.hash import get_md5
-from helperFunctions.uid import is_list_of_uids
-from helperFunctions.web_interface import split_virtual_path, virtual_path_element_to_span
-from storage.db_interface_frontend import FrontEndDbInterface
-from web_interface import filter as flt
-
 
 class FilterClass:
     '''
@@ -1214,21 +1088,6 @@ class FilterClass:
         self._app.jinja_env.filters['user_has_role'] = flt.user_has_role
         self._app.jinja_env.filters['vulnerability_class'] = flt.vulnerability_class
 
-from time import time
-
-from flask import redirect, render_template, request, url_for
-from flask_security import login_required
-
-from helperFunctions.database import ConnectTo
-from statistic.update import StatisticUpdater
-from storage.db_interface_admin import AdminDbInterface
-from storage.db_interface_compare import CompareDbInterface
-from storage.db_interface_frontend import FrontEndDbInterface
-from storage.db_interface_frontend_editing import FrontendEditingDbInterface
-from web_interface.components.component_base import ComponentBase
-from web_interface.security.decorator import roles_accepted
-from web_interface.security.privileges import PRIVILEGES
-
 
 class MiscellaneousRoutes(ComponentBase):
     def _init_component(self):
@@ -1286,18 +1145,6 @@ class MiscellaneousRoutes(ComponentBase):
             deleted_virtual_file_path_entries, deleted_files = sc.delete_firmware(uid)
         return render_template('delete_firmware.html', deleted_vps=deleted_virtual_file_path_entries, deleted_files=deleted_files, uid=uid)
 
-import importlib
-import inspect
-import pkgutil
-
-from flask_restful import Resource
-from helperFunctions.fileSystem import get_src_dir
-from web_interface.components.component_base import ComponentBase
-
-ROUTES_MODULE_NAME = 'routes'
-PLUGIN_CATEGORIES = ['analysis', 'compare']
-PLUGIN_DIR = '{}/plugins'.format(get_src_dir())
-
 
 class PluginRoutes(ComponentBase):
     def _init_component(self):
@@ -1334,18 +1181,6 @@ class PluginRoutes(ComponentBase):
     @staticmethod
     def _get_modules_in_path(path):
         return [module_name for _, module_name, _ in pkgutil.iter_modules([path])]
-from flask import render_template, request
-
-from helperFunctions.database import ConnectTo
-from helperFunctions.web_interface import apply_filters_to_query
-from intercom.front_end_binding import InterComFrontEndBinding
-from statistic.update import StatisticUpdater
-from storage.db_interface_frontend import FrontEndDbInterface
-from storage.db_interface_statistic import StatisticDbViewer
-from web_interface.components.component_base import ComponentBase
-from web_interface.security.decorator import roles_accepted
-from web_interface.security.privileges import PRIVILEGES
-
 
 class StatisticRoutes(ComponentBase):
     def _init_component(self):
@@ -1415,19 +1250,6 @@ class StatisticRoutes(ComponentBase):
                 "software_stats": stats_updater.get_software_components_stats(),
             }
         return stats_dict
-# -*- coding: utf-8 -*-
-import logging
-from contextlib import contextmanager
-
-from flask import render_template, request, flash, redirect, url_for
-from flask_security import current_user
-from sqlalchemy.exc import SQLAlchemyError
-
-from helperFunctions.web_interface import password_is_legal
-from web_interface.components.component_base import ComponentBase
-from web_interface.security.decorator import roles_accepted
-from web_interface.security.privileges import PRIVILEGES, ROLES
-
 
 class UserManagementRoutes(ComponentBase):
 
